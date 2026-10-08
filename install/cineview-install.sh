@@ -5,11 +5,22 @@
 # options:  DRYRUN=1  checks only      HDD_CACHE=0  keep the poster cache off the hard disk
 #           RESTART=1 restart the GUI at the end without asking
 # Every check runs before anything is changed; any failure stops the installer and nothing is changed.
-VERSION="1.0.0"
+INSTALLER_VERSION="1.0.0"
 PKG="enigma2-plugin-skins-cineview-fhd-mla"
-PKG_URL="${CVMLA_PKG_URL:-https://raw.githubusercontent.com/habeb-s/CineView-MLA/main/release/1.0.0/enigma2-plugin-skins-cineview-fhd-mla_1.0.0_all.ipk}"
-PKG_SHA="${CVMLA_PKG_SHA:-4709881b66ae9e5b8cc8dfa7f5b7e3fafdfb57d779431709b8c5c1b48c4cb0a8}"
-PY_NEED="3.14"
+# One package per image, built from the same CineView MLA source (Common Core + image adapter).  The image is taken
+# from the image's own build information (/usr/lib/enigma.info "distro"), cross-checked with a native screen
+# contract of that image; a receiver model list is never used.
+#   openatv: OpenATV 8.0 (7.6 when its Python matches), Python 3.14 - the published 1.0.0 package
+OPENATV_VERSION="1.0.0"
+OPENATV_URL="https://raw.githubusercontent.com/habeb-s/CineView-MLA/main/release/1.0.0/enigma2-plugin-skins-cineview-fhd-mla_1.0.0_all.ipk"
+OPENATV_SHA="4709881b66ae9e5b8cc8dfa7f5b7e3fafdfb57d779431709b8c5c1b48c4cb0a8"
+OPENATV_PY="3.14"
+#   openbh: OpenBH 5.6, Python 3.13 - NOT RELEASED YET: no package address until the OpenBH package is published
+OPENBH_VERSION="@OPENBH_VERSION@"
+OPENBH_URL="@OPENBH_URL@"
+OPENBH_SHA="@OPENBH_SHA@"
+OPENBH_PY="3.13"
+INFO="${CVMLA_INFO:-/usr/lib/enigma.info}"  # CVMLA_INFO: test hook only (another enigma.info)
 NEED_ROOT_KB=40960
 NEED_TMP_KB=12000
 SKIN_NAME="CineView_FHD_MLA"
@@ -39,35 +50,53 @@ ok()   { printf '  %s[OK]%s %s\n' "$G" "$N" "$1"; }
 info() { printf '  %s[..]%s %s\n' "$C" "$N" "$1"; }
 warn() { printf '  %s[!!]%s %s\n' "$Y" "$N" "$1"; }
 fail() { printf '  %s[XX]%s %s\n' "$R" "$N" "$1"; printf '\n%s%sCineView MLA was not installed.%s Nothing was changed on this receiver.\n\n' "$B" "$R" "$N"; exit 1; }
-kv()   { sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" /usr/lib/enigma.info 2>/dev/null | head -1; }
+kv()   { sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" "$INFO" 2>/dev/null | head -1; }
 
-printf '\n%s%s  CineView MLA Smart Installer  %s  %sversion %s%s\n' "$B" "$W" "$N" "$C" "$VERSION" "$N"
+printf '\n%s%s  CineView MLA Smart Installer  %s  %sversion %s%s\n' "$B" "$W" "$N" "$C" "$INSTALLER_VERSION" "$N"
 printf '  %sDesign & Development by habeb-s (c) 2026%s\n' "$W" "$N"
 
 section "Device"
 [ -x /usr/bin/enigma2 ] && [ -d /usr/lib/enigma2/python/Components ] || fail "Enigma2 was not found on this receiver."
-[ -r /usr/lib/enigma.info ] || fail "The image information (/usr/lib/enigma.info) is missing: the image cannot be identified."
+[ -r "$INFO" ] || fail "The image information (/usr/lib/enigma.info) is missing: the image cannot be identified."
 BRAND=$(kv displaybrand); MODEL=$(kv displaymodel); MB=$(kv machinebuild)
 [ -n "$MB" ] || fail "The receiver model cannot be identified."
 ok "${BRAND:+$BRAND }${MODEL:-$MB}"
 
 section "Image"
 DISTRO=$(kv distro); IVER=$(kv imageversion)
-[ "$DISTRO" = "openatv" ] || fail "This image is '${DISTRO:-unknown}'. CineView MLA needs OpenATV."
-ok "OpenATV $IVER detected"
+# second, independent evidence: the image's own Plugin Browser contract (OpenATV: PackageAction; OpenBH:
+# PluginDownloadBrowser and no PackageAction).  Disagreement with enigma.info = the image is not identified.
+PB=$(ls /usr/lib/enigma2/python/Screens/PluginBrowser.py* 2>/dev/null | head -1)
+has() { [ -n "$PB" ] && python3 -c 'import sys; sys.exit(0 if sys.argv[2].encode() in open(sys.argv[1], "rb").read() else 1)' "$PB" "$1" 2>/dev/null; }
+case "$DISTRO" in
+	openatv)
+		IMG="OpenATV"; VERSION="$OPENATV_VERSION"; PKG_URL="$OPENATV_URL"; PKG_SHA="$OPENATV_SHA"; PY_NEED="$OPENATV_PY"
+		has PackageAction || fail "enigma.info names OpenATV, but the image's screens are not OpenATV's: the image cannot be identified reliably." ;;
+	openbh)
+		IMG="OpenBH"; VERSION="$OPENBH_VERSION"; PKG_URL="$OPENBH_URL"; PKG_SHA="$OPENBH_SHA"; PY_NEED="$OPENBH_PY"
+		{ has PluginDownloadBrowser && ! has PackageAction; } || fail "enigma.info names OpenBH, but the image's screens are not OpenBH's: the image cannot be identified reliably." ;;
+	"") fail "This image does not name itself in /usr/lib/enigma.info: it cannot be identified." ;;
+	*) fail "This image is '$DISTRO'. CineView MLA supports OpenATV and OpenBH." ;;
+esac
+ok "$IMG $IVER detected"
 
 section "Version"
-case "$IVER" in
-	8.0|8.0.*) ok "OpenATV $IVER is supported (fully tested on OpenATV 8.0)" ;;
-	7.6|7.6.*) warn "OpenATV $IVER: the screens are compatible; the Python check below decides" ;;
-	7.[0-5]|7.[0-5].*|6.*|5.*) fail "OpenATV $IVER is too old: it lacks skin features CineView MLA needs. Please update to OpenATV 8.0." ;;
-	*) fail "OpenATV $IVER has not been checked with CineView MLA $VERSION yet." ;;
+case "$DISTRO:$IVER" in
+	openatv:8.0|openatv:8.0.*) ok "OpenATV $IVER is supported (fully tested on OpenATV 8.0)" ;;
+	openatv:7.6|openatv:7.6.*) warn "OpenATV $IVER: the screens are compatible; the Python check below decides" ;;
+	openatv:7.[0-5]|openatv:7.[0-5].*|openatv:6.*|openatv:5.*) fail "OpenATV $IVER is too old: it lacks skin features CineView MLA needs. Please update to OpenATV 8.0." ;;
+	openbh:5.6|openbh:5.6.*) ok "OpenBH $IVER is supported (tested on OpenBH 5.6)" ;;
+	openbh:[0-4]|openbh:[0-4].*|openbh:5.[0-5]|openbh:5.[0-5].*) fail "OpenBH $IVER is too old: CineView MLA needs OpenBH 5.6 or newer." ;;
+	*) fail "$IMG $IVER has not been checked with CineView MLA yet." ;;
 esac
+# the package for this image (CVMLA_PKG_URL / CVMLA_PKG_SHA / CVMLA_VERSION: test overrides)
+PKG_URL="${CVMLA_PKG_URL:-$PKG_URL}"; PKG_SHA="${CVMLA_PKG_SHA:-$PKG_SHA}"; VERSION="${CVMLA_VERSION:-$VERSION}"
+case "$PKG_URL$PKG_SHA$VERSION" in *@*) fail "The $IMG package of CineView MLA is not released yet." ;; esac
 
 section "Python"
 PYV=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
 [ -n "$PYV" ] || fail "Python 3 was not found."
-[ "$PYV" = "$PY_NEED" ] || fail "Python $PYV found; this package is built for Python $PY_NEED (OpenATV 8.0)."
+[ "$PYV" = "$PY_NEED" ] || fail "Python $PYV found; this package is built for Python $PY_NEED ($IMG)."
 ok "Python $PYV compatible"
 
 section "Architecture"
@@ -148,8 +177,19 @@ esac
 
 section "Existing installation"
 CUR=$(opkg status "$PKG" 2>/dev/null | sed -n 's/^Version: //p')
+PST=$(opkg status "$PKG" 2>/dev/null | sed -n 's/^Status: //p')
 MODE=install
-if [ -z "$CUR" ]; then
+# A maintainer script that failed leaves CineView's package entry incomplete (half-installed / unpacked /
+# half-configured): the database names the new version while the old files are still in place.  Repair = one
+# reinstall of the verified package; only CineView's own entry is involved.
+case "$PST" in
+	*half-installed*|*unpacked*|*half-configured*)
+		warn "An earlier CineView MLA installation was not completed (package state: $PST)"
+		MODE=repair ;;
+esac
+if [ "$MODE" = "repair" ]; then
+	info "It is repaired with a verified reinstall of CineView MLA $VERSION"
+elif [ -z "$CUR" ]; then
 	info "No earlier CineView MLA installation"
 else
 	info "Current version: $CUR"
@@ -192,11 +232,35 @@ if [ "$MODE" != "same" ]; then
 		fi
 		ok "Restore point saved"
 	fi
-	OPT=""; [ "$MODE" = "reinstall" ] && OPT="--force-reinstall"
+	OPT=""; case "$MODE" in reinstall|repair) OPT="--force-reinstall" ;; esac
 	if ! opkg install $OPT "$IPK" >"$LOG" 2>&1; then
-		REASON=$(grep -h "CineView MLA:\|Collected errors\|cannot\|Cannot\|error" "$LOG" | grep -v "^ \* opkg_" | head -3)
-		fail "The package manager stopped the installation.${REASON:+ $REASON}"
+		PST=$(opkg status "$PKG" 2>/dev/null | sed -n 's/^Status: //p')
+		if grep -q "killed by signal 11\|Segmentation fault" "$LOG" && ! grep -q "CineView MLA: .*Stopped\|installation stopped" "$LOG"; then
+			# The image's shell crashed while running a package script - not a refusal by CineView's own checks.
+			# CineView's preinst only checks (it changes nothing), so ONE reinstall of the same verified package
+			# is safe.  Never a loop.
+			warn "The image's shell crashed during the installation (signal 11) - one more attempt"
+			if ! opkg install --force-reinstall "$IPK" >"$LOG.2" 2>&1; then
+				PST=$(opkg status "$PKG" 2>/dev/null | sed -n 's/^Status: //p')
+				printf '  %s[XX]%s The package manager stopped the installation twice (package state: %s).\n' "$R" "$N" "${PST:-none}"
+				printf '\n%s%sCineView MLA was not installed.%s Run the installer again: it repairs the incomplete installation first.\n\n' "$B" "$R" "$N"
+				exit 1
+			fi
+			cat "$LOG.2" >> "$LOG"
+			ok "Second attempt completed"
+		else
+			REASON=$(grep -h "CineView MLA:\|Collected errors\|cannot\|Cannot\|error" "$LOG" | grep -v "^ \* opkg_" | head -3)
+			case "$PST" in
+				*half-installed*|*unpacked*|*half-configured*)
+					printf '  %s[XX]%s The package manager stopped the installation.%s\n' "$R" "$N" "${REASON:+ $REASON}"
+					printf '\n%s%sCineView MLA was not installed%s and its package entry is incomplete (%s). Run the installer again to repair it.\n\n' "$B" "$R" "$N" "$PST"
+					exit 1 ;;
+			esac
+			fail "The package manager stopped the installation.${REASON:+ $REASON}"
+		fi
 	fi
+	PST=$(opkg status "$PKG" 2>/dev/null | sed -n 's/^Status: //p')
+	case "$PST" in *" installed") ;; *) fail "The package state after installing is '${PST:-none}' (expected: installed)." ;; esac
 	grep -q "factory design (Classic, Navy) is active" "$LOG" && warn "The previous design could not be kept: the factory design (Classic, Navy) is active"
 	ok "CineView MLA $VERSION installed"
 	if [ "${HDD_CACHE:-1}" = "0" ] && [ "${CACHE%%|*}" != "kept" ]; then
